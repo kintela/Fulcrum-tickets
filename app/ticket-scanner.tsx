@@ -2,13 +2,13 @@
 
 import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import type { AnalyzeReceiptResponse, ApiErrorResponse, Receipt } from "@/lib/receipt";
+import type { AnalyzeReceiptResponse, ApiErrorResponse, TicketAnalizado } from "@/lib/receipt";
 
 type Step = "capture" | "preview" | "processing" | "review" | "success";
-type ReceiptData = { merchant: string; date: string; detail: string; subtotal: string; tax: string; total: string };
+type ReceiptData = { receiptNumber: string; merchant: string; date: string; detail: string; subtotal: string; tax: string; total: string };
 
 const initialReceipt: ReceiptData = {
-  merchant: "", date: "", detail: "", subtotal: "", tax: "", total: "",
+  receiptNumber: "", merchant: "", date: "", detail: "", subtotal: "", tax: "", total: "",
 };
 
 function formatAmount(value: number | null) {
@@ -21,15 +21,16 @@ function formatDate(value: string | null) {
   return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
 }
 
-function receiptToForm(receipt: Receipt): ReceiptData {
-  const descriptions = receipt.items.flatMap((item) => item.description ? [item.description] : []);
+function receiptToForm(ticket: TicketAnalizado): ReceiptData {
+  const descriptions = ticket.articulos.flatMap((item) => item.descripcion ? [item.descripcion] : []);
   return {
-    merchant: receipt.merchantName ?? "",
-    date: formatDate(receipt.transactionDate),
-    detail: descriptions.slice(0, 3).join(", ") || receipt.receiptType || "",
-    subtotal: formatAmount(receipt.subtotal),
-    tax: formatAmount(receipt.totalTax),
-    total: formatAmount(receipt.total),
+    receiptNumber: ticket.numeroTicket ?? "",
+    merchant: ticket.comercio ?? "",
+    date: formatDate(ticket.fecha),
+    detail: descriptions.slice(0, 3).join(", ") || ticket.tipoTicket || "",
+    subtotal: formatAmount(ticket.baseImponible),
+    tax: formatAmount(ticket.importeIva),
+    total: formatAmount(ticket.importeTotal),
   };
 }
 
@@ -78,8 +79,8 @@ export default function TicketScanner() {
         throw new Error("error" in body ? body.error.message : "No hemos podido analizar el ticket.");
       }
 
-      setData(receiptToForm(body.receipt));
-      setMerchantConfidence(body.receipt.confidence.merchantName);
+      setData(receiptToForm(body.ticket));
+      setMerchantConfidence(body.ticket.confianza.comercio);
       setStep("review");
     } catch (analysisError) {
       setError(analysisError instanceof Error ? analysisError.message : "No hemos podido analizar el ticket.");
@@ -110,6 +111,7 @@ export default function TicketScanner() {
         <form onSubmit={(event) => { event.preventDefault(); setStep("success"); }}>
           <label className="field"><span>Comercio</span><input onChange={(event) => updateField("merchant", event.target.value)} value={data.merchant}/>{merchantConfidence !== null && <small><CheckIcon size={13}/> Confianza {merchantConfidence >= .8 ? "alta" : merchantConfidence >= .5 ? "media" : "baja"}</small>}</label>
           <label className="field"><span>Fecha</span><input inputMode="numeric" onChange={(event) => updateField("date", event.target.value)} value={data.date}/></label>
+          <label className="field"><span>Nº de ticket</span><input onChange={(event) => updateField("receiptNumber", event.target.value)} value={data.receiptNumber}/></label>
           <label className="field"><span>Concepto</span><input onChange={(event) => updateField("detail", event.target.value)} value={data.detail}/></label>
           <div className="amount-card"><label><span>Base imponible</span><div><input inputMode="decimal" onChange={(event) => updateField("subtotal", event.target.value)} value={data.subtotal}/><b>€</b></div></label><label><span>IVA</span><div><input inputMode="decimal" onChange={(event) => updateField("tax", event.target.value)} value={data.tax}/><b>€</b></div></label><div className="total-row"><span>Total</span><div><input aria-label="Total" inputMode="decimal" onChange={(event) => updateField("total", event.target.value)} value={data.total}/><b>€</b></div></div></div>
           <button className="primary-button confirm-button" type="submit">Confirmar y añadir <ArrowIcon/></button>
@@ -117,7 +119,7 @@ export default function TicketScanner() {
       </div>}
       {step === "success" && <div className="screen success-screen">
         <div className="success-check"><CheckIcon size={40}/></div><span className="eyebrow">Justificante añadido</span><h1>¡Todo listo!</h1><p>Los datos del ticket se han preparado para incorporarlos a tu nota de gastos.</p>
-        <div className="summary-card"><div><span>Comercio</span><strong>{data.merchant}</strong></div><div><span>Concepto</span><strong>{data.detail}</strong></div><div><span>Fecha</span><strong>{data.date}</strong></div><div className="summary-total"><span>Total</span><strong>{data.total} €</strong></div></div>
+        <div className="summary-card"><div><span>Comercio</span><strong>{data.merchant}</strong></div><div><span>Nº de ticket</span><strong>{data.receiptNumber || "—"}</strong></div><div><span>Concepto</span><strong>{data.detail}</strong></div><div><span>Fecha</span><strong>{data.date}</strong></div><div className="summary-total"><span>Total</span><strong>{data.total} €</strong></div></div>
         <button className="primary-button full-button" onClick={startAgain} type="button">Escanear otro ticket <CameraIcon size={20}/></button><button className="text-link" type="button">Volver a la nota de gastos</button>
       </div>}
       <footer><span className="lock-icon">⌾</span> Tus datos se procesan de forma segura</footer>

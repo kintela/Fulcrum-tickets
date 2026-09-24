@@ -25,6 +25,7 @@ type AzureAnalyzeOperation = {
   status?: "notStarted" | "running" | "succeeded" | "failed" | "canceled";
   error?: { code?: string; message?: string };
   analyzeResult?: {
+    content?: string;
     documents?: Array<{ fields?: Record<string, AzureField> }>;
   };
 };
@@ -72,6 +73,53 @@ function lowestConfidence(fields: Array<AzureField | undefined>): number | null 
   return values.length > 0 ? Math.min(...values) : null;
 }
 
+function extractReceiptNumber(
+  fields: Record<string, AzureField>,
+  content: string | undefined,
+): { value: string | null; confidence: number | null } {
+  const structuredField =
+    fields.ReceiptNumber ??
+    fields.TicketNumber ??
+    fields.InvoiceId ??
+    fields.TransactionId;
+  const structuredValue = asString(structuredField);
+
+  if (structuredValue) {
+    return { value: structuredValue, confidence: confidence(structuredField) };
+  }
+
+  const lines = content?.split(/\r?\n/).map((line) => line.trim()) ?? [];
+  const documentLabel = String.raw`(?:fra\.?\s*sim(?:plificada)?|factura\s+simplificada|ticket|recibo|receipt)`;
+  const numberMarker = String.raw`(?:n(?:[º°o0g]|[úu]m(?:ero)?|ro)?\.?|number)`;
+  const operationLabel = String.raw`${numberMarker}\s*(?:op(?:eraci[oó]n)?\.?)?`;
+  const identifier = String.raw`([A-Z0-9][A-Z0-9./-]{2,})`;
+  const sameLinePatterns = [
+    new RegExp(`^${documentLabel}(?:\\s+${numberMarker})?\\s*[:#-]?\\s*${identifier}$`, "i"),
+    new RegExp(`^${numberMarker}\\s+${documentLabel}\\s*[:#-]?\\s*${identifier}$`, "i"),
+    new RegExp(`^${operationLabel}\\s*[:#-]?\\s*${identifier}$`, "i"),
+  ];
+  const labelOnlyPatterns = [
+    new RegExp(`^${documentLabel}(?:\\s+${numberMarker})?\\s*[:#-]?$`, "i"),
+    new RegExp(`^${numberMarker}\\s+${documentLabel}\\s*[:#-]?$`, "i"),
+    new RegExp(`^${operationLabel}\\s*[:#-]?$`, "i"),
+  ];
+  const identifierPattern = new RegExp(`^${identifier}$`, "i");
+
+  for (let index = 0; index < lines.length; index += 1) {
+    for (const pattern of sameLinePatterns) {
+      const match = lines[index].match(pattern);
+      if (match) return { value: match[1], confidence: null };
+    }
+
+    if (labelOnlyPatterns.some((pattern) => pattern.test(lines[index]))) {
+      const nextLineMatch = lines[index + 1]?.match(identifierPattern);
+      if (nextLineMatch) return { value: nextLineMatch[1], confidence: null };
+    }
+  }
+
+  return { value: null, confidence: null };
+}
+
 function normalizeItem(field: AzureField): ReceiptItem {
   const item = field.valueObject ?? {};
 
@@ -95,6 +143,10 @@ export function normalizeAzureReceipt(operation: AzureAnalyzeOperation): Receipt
   }
 
   const items = (fields.Items?.valueArray ?? []).map(normalizeItem);
+  const receiptNumber = extractReceiptNumber(
+    fields,
+    operation.analyzeResult?.content,
+  );
   const taxDetails = (fields.TaxDetails?.valueArray ?? []).map(
     (field) => field.valueObject ?? {},
   );
@@ -113,6 +165,7 @@ export function normalizeAzureReceipt(operation: AzureAnalyzeOperation): Receipt
     null;
 
   return {
+    receiptNumber: receiptNumber.value,
     merchantName: asString(fields.MerchantName),
     transactionDate: asString(fields.TransactionDate),
     subtotal,
@@ -122,6 +175,7 @@ export function normalizeAzureReceipt(operation: AzureAnalyzeOperation): Receipt
     receiptType: asString(fields.ReceiptType),
     items,
     confidence: {
+      receiptNumber: receiptNumber.confidence,
       merchantName: confidence(fields.MerchantName),
       transactionDate: confidence(fields.TransactionDate),
       subtotal: confidence(fields.Subtotal) ?? lowestConfidence(netAmountFields),

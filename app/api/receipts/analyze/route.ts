@@ -1,5 +1,5 @@
 import { analyzeReceipt, DocumentIntelligenceError } from "@/lib/azure-document-intelligence";
-import type { ApiErrorResponse, AnalyzeReceiptResponse } from "@/lib/receipt";
+import type { ApiErrorResponse, AnalyzeReceiptResponse, Receipt, TicketAnalizado } from "@/lib/receipt";
 
 export const maxDuration = 60;
 
@@ -22,6 +22,32 @@ function maximumFileSize() {
   return Number.isSafeInteger(configured) && configured > 0
     ? configured
     : DEFAULT_MAX_FILE_SIZE;
+}
+
+function toTicketAnalizado(receipt: Receipt): TicketAnalizado {
+  return {
+    numeroTicket: receipt.receiptNumber,
+    comercio: receipt.merchantName,
+    fecha: receipt.transactionDate,
+    baseImponible: receipt.subtotal,
+    importeIva: receipt.totalTax,
+    importeTotal: receipt.total,
+    tipoTicket: receipt.receiptType,
+    articulos: receipt.items.map((item) => ({
+      descripcion: item.description,
+      cantidad: item.quantity,
+      precioUnitario: item.unitPrice,
+      importeTotal: item.totalPrice,
+    })),
+    confianza: {
+      numeroTicket: receipt.confidence.receiptNumber,
+      comercio: receipt.confidence.merchantName,
+      fecha: receipt.confidence.transactionDate,
+      baseImponible: receipt.confidence.subtotal,
+      importeIva: receipt.confidence.totalTax,
+      importeTotal: receipt.confidence.total,
+    },
+  };
 }
 
 export async function POST(request: Request) {
@@ -57,7 +83,7 @@ export async function POST(request: Request) {
 
     const azureContentType = file.type === "image/heic" ? "image/heif" : file.type;
     const receipt = await analyzeReceipt(await file.arrayBuffer(), azureContentType);
-    return Response.json({ receipt } satisfies AnalyzeReceiptResponse);
+    return Response.json({ ticket: toTicketAnalizado(receipt) } satisfies AnalyzeReceiptResponse);
   } catch (error) {
     if (error instanceof DocumentIntelligenceError) {
       return errorResponse(error.code, error.message, error.status);
