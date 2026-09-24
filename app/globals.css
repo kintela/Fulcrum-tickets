@@ -20,3 +20,4 @@ footer { padding:13px;border-top:1px solid #edf0f1;text-align:center;color:#8a94
 @media (max-height:760px) and (min-width:521px) { .app-shell { padding:16px; }.phone-frame { min-height:calc(100svh - 32px); }.screen { padding-top:22px; }.capture-zone { min-height:250px; }.image-preview { min-height:300px; } }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important; } }
 .mini-preview { position:relative; }
+.error-message { margin:12px 0 -5px;padding:10px 12px;border:1px solid #f0caca;border-radius:10px;background:#fff5f5;color:#9d2f2f;font-size:11px;line-height:1.45; }

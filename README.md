@@ -1,4 +1,16 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+Ticket scanner built with Next.js and Azure AI Document Intelligence.
+
+## Azure Document Intelligence
+
+The browser sends the selected receipt to `POST /api/receipts/analyze`. The Route Handler keeps the Azure key on the server, calls the `prebuilt-receipt` model, polls the asynchronous operation, and returns a normalized receipt contract to the UI.
+
+Copy `.env.example` to `.env.local` and fill in the endpoint and key from your Azure Document Intelligence resource:
+
+```bash
+cp .env.example .env.local
+```
+
+The default upload limit is 4 MB so it also works with Azure's F0 tier. Set `RECEIPT_MAX_FILE_SIZE_BYTES` to a larger value when using a tier that supports it. Never prefix the Azure key with `NEXT_PUBLIC_`: it must remain server-only.
 
 ## Getting Started
 

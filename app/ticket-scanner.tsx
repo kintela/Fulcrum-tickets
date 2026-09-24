@@ -2,14 +2,36 @@
 
 import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import type { AnalyzeReceiptResponse, ApiErrorResponse, Receipt } from "@/lib/receipt";
 
 type Step = "capture" | "preview" | "processing" | "review" | "success";
 type ReceiptData = { merchant: string; date: string; detail: string; subtotal: string; tax: string; total: string };
 
 const initialReceipt: ReceiptData = {
-  merchant: "Restaurante La Plaza", date: "18/09/2026", detail: "Comida con cliente",
-  subtotal: "45,00", tax: "4,50", total: "49,50",
+  merchant: "", date: "", detail: "", subtotal: "", tax: "", total: "",
 };
+
+function formatAmount(value: number | null) {
+  return value === null ? "" : new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
+function receiptToForm(receipt: Receipt): ReceiptData {
+  const descriptions = receipt.items.flatMap((item) => item.description ? [item.description] : []);
+  return {
+    merchant: receipt.merchantName ?? "",
+    date: formatDate(receipt.transactionDate),
+    detail: descriptions.slice(0, 3).join(", ") || receipt.receiptType || "",
+    subtotal: formatAmount(receipt.subtotal),
+    tax: formatAmount(receipt.totalTax),
+    total: formatAmount(receipt.total),
+  };
+}
 
 function Icon({ children, size = 24 }: { children: ReactNode; size?: number }) {
   return <svg aria-hidden="true" fill="none" height={size} viewBox="0 0 24 24" width={size}>{children}</svg>;
@@ -31,16 +53,41 @@ function ReceiptArtwork() {
 export default function TicketScanner() {
   const [step, setStep] = useState<Step>("capture");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [data, setData] = useState(initialReceipt);
+  const [error, setError] = useState<string | null>(null);
+  const [merchantConfidence, setMerchantConfidence] = useState<number | null>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => { if (imageUrl) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
-  function handleImage(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; setImageUrl(URL.createObjectURL(file)); setStep("preview"); event.target.value = ""; }
-  function discardImage() { if (imageUrl) URL.revokeObjectURL(imageUrl); setImageUrl(null); setStep("capture"); }
-  function analyze() { setStep("processing"); window.setTimeout(() => setStep("review"), 1800); }
+  function handleImage(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; if (imageUrl) URL.revokeObjectURL(imageUrl); setSelectedFile(file); setImageUrl(URL.createObjectURL(file)); setError(null); setStep("preview"); event.target.value = ""; }
+  function discardImage() { if (imageUrl) URL.revokeObjectURL(imageUrl); setImageUrl(null); setSelectedFile(null); setError(null); setStep("capture"); }
+  async function analyze() {
+    if (!selectedFile) return;
+    setError(null);
+    setStep("processing");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const response = await fetch("/api/receipts/analyze", { method: "POST", body: formData });
+      const body = await response.json() as AnalyzeReceiptResponse | ApiErrorResponse;
+
+      if (!response.ok || "error" in body) {
+        throw new Error("error" in body ? body.error.message : "No hemos podido analizar el ticket.");
+      }
+
+      setData(receiptToForm(body.receipt));
+      setMerchantConfidence(body.receipt.confidence.merchantName);
+      setStep("review");
+    } catch (analysisError) {
+      setError(analysisError instanceof Error ? analysisError.message : "No hemos podido analizar el ticket.");
+      setStep("preview");
+    }
+  }
   function updateField(field: keyof ReceiptData, value: string) { setData((current) => ({ ...current, [field]: value })); }
-  function startAgain() { discardImage(); setData(initialReceipt); }
+  function startAgain() { discardImage(); setData(initialReceipt); setMerchantConfidence(null); }
 
   return <main className="app-shell">
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
@@ -55,13 +102,14 @@ export default function TicketScanner() {
       {(step === "preview" || step === "processing") && <div className="screen preview-screen">
         <div className="step-heading"><span className="eyebrow">Paso 1 de 2</span><h1>Revisa la imagen</h1><p>Comprueba que los datos se leen con claridad.</p></div>
         <div className="image-preview">{imageUrl ? <Image alt="Ticket seleccionado" fill src={imageUrl} unoptimized/> : <ReceiptArtwork/>}{step === "processing" && <div className="processing-overlay"><span className="scan-line"/><span className="loader"/><strong>Estamos leyendo tu ticket</strong><small>Identificando fecha, concepto e importes…</small></div>}</div>
+        {error && <p className="error-message" role="alert">{error}</p>}
         <div className="preview-actions"><button className="text-button" disabled={step === "processing"} onClick={discardImage} type="button"><CloseIcon/> Repetir foto</button><button className="primary-button" disabled={step === "processing"} onClick={analyze} type="button">Analizar ticket <ArrowIcon/></button></div>
       </div>}
       {step === "review" && <div className="screen review-screen">
         <div className="review-top"><div className="mini-preview">{imageUrl ? <Image alt="Ticket" fill src={imageUrl} unoptimized/> : <ReceiptArtwork/>}</div><div><span className="success-label"><CheckIcon size={15}/> Lectura completada</span><h1>Revisa los datos</h1><p>Edita cualquier campo antes de confirmar.</p></div></div>
         <form onSubmit={(event) => { event.preventDefault(); setStep("success"); }}>
-          <label className="field"><span>Comercio</span><input onChange={(event) => updateField("merchant", event.target.value)} value={data.merchant}/><small><CheckIcon size={13}/> Confianza alta</small></label>
-          <div className="field-row"><label className="field"><span>Fecha</span><input inputMode="numeric" onChange={(event) => updateField("date", event.target.value)} value={data.date}/></label><label className="field"><span>Moneda</span><div className="currency-field">EUR <span>€</span></div></label></div>
+          <label className="field"><span>Comercio</span><input onChange={(event) => updateField("merchant", event.target.value)} value={data.merchant}/>{merchantConfidence !== null && <small><CheckIcon size={13}/> Confianza {merchantConfidence >= .8 ? "alta" : merchantConfidence >= .5 ? "media" : "baja"}</small>}</label>
+          <label className="field"><span>Fecha</span><input inputMode="numeric" onChange={(event) => updateField("date", event.target.value)} value={data.date}/></label>
           <label className="field"><span>Concepto</span><input onChange={(event) => updateField("detail", event.target.value)} value={data.detail}/></label>
           <div className="amount-card"><label><span>Base imponible</span><div><input inputMode="decimal" onChange={(event) => updateField("subtotal", event.target.value)} value={data.subtotal}/><b>€</b></div></label><label><span>IVA</span><div><input inputMode="decimal" onChange={(event) => updateField("tax", event.target.value)} value={data.tax}/><b>€</b></div></label><div className="total-row"><span>Total</span><div><input aria-label="Total" inputMode="decimal" onChange={(event) => updateField("total", event.target.value)} value={data.total}/><b>€</b></div></div></div>
           <button className="primary-button confirm-button" type="submit">Confirmar y añadir <ArrowIcon/></button>
@@ -73,7 +121,7 @@ export default function TicketScanner() {
         <button className="primary-button full-button" onClick={startAgain} type="button">Escanear otro ticket <CameraIcon size={20}/></button><button className="text-link" type="button">Volver a la nota de gastos</button>
       </div>}
       <footer><span className="lock-icon">⌾</span> Tus datos se procesan de forma segura</footer>
-      <input accept="image/*" capture="environment" className="sr-only" onChange={handleImage} ref={cameraInput} type="file"/><input accept="image/*" className="sr-only" onChange={handleImage} ref={galleryInput} type="file"/>
+      <input accept="image/jpeg,image/png,image/bmp,image/tiff,image/heif,image/heic" capture="environment" className="sr-only" onChange={handleImage} ref={cameraInput} type="file"/><input accept="image/jpeg,image/png,image/bmp,image/tiff,image/heif,image/heic" className="sr-only" onChange={handleImage} ref={galleryInput} type="file"/>
     </section>
   </main>;
 }
