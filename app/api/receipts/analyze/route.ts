@@ -1,4 +1,6 @@
+import { getServerSession } from "next-auth";
 import { analyzeReceipt, DocumentIntelligenceError } from "@/lib/azure-document-intelligence";
+import { authOptions } from "@/lib/auth";
 import type { ApiErrorResponse, AnalyzeReceiptResponse, Receipt, TicketAnalizado } from "@/lib/receipt";
 
 export const maxDuration = 60;
@@ -51,6 +53,11 @@ function toTicketAnalizado(receipt: Receipt): TicketAnalizado {
 }
 
 export async function POST(request: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return errorResponse("AUTH_REQUIRED", "Debes iniciar sesión con tu cuenta corporativa.", 401);
+  }
+
   try {
     const formData = await request.formData();
     const file = formData.get("file");

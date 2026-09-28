@@ -1,5 +1,9 @@
 Ticket scanner built with Next.js and Azure AI Document Intelligence.
 
+## Microsoft Entra ID
+
+The scanner requires a corporate Microsoft Entra ID session. Configure the single-tenant application registration and environment variables by following [ENTRA_SETUP.md](./ENTRA_SETUP.md).
+
 ## Azure Document Intelligence
 
 The browser sends the selected receipt to `POST /api/receipts/analyze`. The Route Handler keeps the Azure key on the server, calls the `prebuilt-receipt` model, polls the asynchronous operation, and returns a normalized receipt contract to the UI.

@@ -3,9 +3,10 @@
 import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import type { AnalyzeReceiptResponse, ApiErrorResponse, TicketAnalizado, TicketParaEnviar } from "@/lib/receipt";
+import LogoutButton from "./logout-button";
 
 type Step = "capture" | "preview" | "processing" | "review" | "success";
-type ReceiptData = Omit<TicketParaEnviar, "baseImponible" | "importeIva" | "importeTotal"> & {
+type ReceiptData = Omit<TicketParaEnviar, "email" | "baseImponible" | "importeIva" | "importeTotal"> & {
   baseImponible: string;
   importeIva: string;
   importeTotal: string;
@@ -58,9 +59,10 @@ function dateToApiFormat(value: string) {
   return match ? `${match[3]}-${match[2]}-${match[1]}` : value.trim();
 }
 
-function formToPayload(data: ReceiptData): TicketParaEnviar {
+function formToPayload(data: ReceiptData, email: string): TicketParaEnviar {
   return {
     ...data,
+    email,
     fecha: dateToApiFormat(data.fecha),
     baseImponible: parseAmount(data.baseImponible, "base imponible"),
     importeIva: parseAmount(data.importeIva, "IVA"),
@@ -85,7 +87,7 @@ function ReceiptArtwork() {
   </div></div>;
 }
 
-export default function TicketScanner() {
+export default function TicketScanner({ userEmail, userName }: { userEmail: string; userName: string }) {
   const [step, setStep] = useState<Step>("capture");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -98,7 +100,7 @@ export default function TicketScanner() {
   let payloadPreview: TicketParaEnviar | null = null;
   let payloadPreviewError: string | null = null;
   try {
-    payloadPreview = formToPayload(data);
+    payloadPreview = formToPayload(data, userEmail);
   } catch (previewError) {
     payloadPreviewError = previewError instanceof Error ? previewError.message : "Los datos no son válidos.";
   }
@@ -139,7 +141,7 @@ export default function TicketScanner() {
     setIsSubmitting(true);
 
     try {
-      const payload = formToPayload(data);
+      const payload = formToPayload(data, userEmail);
       const formData = new FormData();
       formData.append("Datos", new Blob([JSON.stringify(payload)], { type: "application/json" }), "datos.json");
       formData.append("Imagen", selectedFile, selectedFile.name);
@@ -164,7 +166,7 @@ export default function TicketScanner() {
   return <main className="app-shell">
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <section className="phone-frame">
-      <header className="topbar"><div className="brand" aria-label="Fulcrum Notas de Gastos"><span className="brand-symbol"><span>F</span></span><span className="brand-copy"><strong>fulcrum</strong><small>notas de gastos</small></span></div><span className="secure-badge"><span className="secure-dot"/> Sesión segura</span></header>
+      <header className="topbar"><div className="brand" aria-label="Fulcrum Notas de Gastos"><span className="brand-symbol"><span>F</span></span><span className="brand-copy"><strong>fulcrum</strong><small>notas de gastos</small></span></div><div className="session-actions"><span className="session-user" title={userName}>{userName}</span><LogoutButton/></div></header>
       {step === "capture" && <div className="screen capture-screen">
         <div className="intro-copy"><span className="eyebrow">Nuevo justificante</span><h1>Fotografía tu ticket</h1><p>Lo leeremos por ti para que solo tengas que revisar y confirmar.</p></div>
         <button className="capture-zone" onClick={() => cameraInput.current?.click()} type="button"><span className="focus-corner corner-tl"/><span className="focus-corner corner-tr"/><span className="focus-corner corner-bl"/><span className="focus-corner corner-br"/><span className="camera-orb"><CameraIcon size={34}/></span><strong>Hacer una foto</strong><span>Coloca el ticket sobre una superficie plana</span></button>

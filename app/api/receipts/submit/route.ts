@@ -1,8 +1,11 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import type { ApiErrorResponse, TicketParaEnviar } from "@/lib/receipt";
 
 export const maxDuration = 60;
 
 const TEXT_FIELDS = [
+  "email",
   "objeto",
   "localidad",
   "numeroTicket",
@@ -36,6 +39,14 @@ function upstreamErrorMessage(value: unknown) {
 }
 
 export async function POST(request: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return errorResponse("AUTH_REQUIRED", "Debes iniciar sesión con tu cuenta corporativa.", 401);
+  }
+  if (!session.user.email) {
+    return errorResponse("AUTH_EMAIL_REQUIRED", "La sesión corporativa no contiene una dirección de correo.", 403);
+  }
+
   const matrixApiUrl = process.env.MATRIX_RECEIPTS_API_URL;
 
   if (!matrixApiUrl) {
@@ -62,8 +73,13 @@ export async function POST(request: Request) {
       return errorResponse("INVALID_TICKET_DATA", "Los campos del ticket no son válidos.", 400);
     }
 
+    const authenticatedTicket: TicketParaEnviar = {
+      ...ticket,
+      email: session.user.email,
+    };
+
     const outgoing = new FormData();
-    outgoing.append("Datos", new Blob([JSON.stringify(ticket)], { type: "application/json" }), "datos.json");
+    outgoing.append("Datos", new Blob([JSON.stringify(authenticatedTicket)], { type: "application/json" }), "datos.json");
     outgoing.append("Imagen", imagen, imagen.name);
 
     const headers = new Headers();

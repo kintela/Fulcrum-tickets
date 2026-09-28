@@ -60,6 +60,7 @@ export type AnalyzeReceiptResponse = {
 };
 
 export type TicketParaEnviar = {
+  email: string;
   objeto: string;
   localidad: string;
   numeroTicket: string;
