@@ -59,6 +59,18 @@ export type AnalyzeReceiptResponse = {
   ticket: TicketAnalizado;
 };
 
+export type TicketParaEnviar = {
+  objeto: string;
+  localidad: string;
+  numeroTicket: string;
+  comercio: string;
+  fecha: string;
+  concepto: string;
+  baseImponible: number | null;
+  importeIva: number | null;
+  importeTotal: number | null;
+};
+
 export type ApiErrorResponse = {
   error: {
     code: string;

@@ -2,10 +2,14 @@
 
 import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import type { AnalyzeReceiptResponse, ApiErrorResponse, TicketAnalizado } from "@/lib/receipt";
+import type { AnalyzeReceiptResponse, ApiErrorResponse, TicketAnalizado, TicketParaEnviar } from "@/lib/receipt";
 
 type Step = "capture" | "preview" | "processing" | "review" | "success";
-type ReceiptData = { objeto: string; localidad: string; numeroTicket: string; comercio: string; fecha: string; concepto: string; baseImponible: string; importeIva: string; importeTotal: string };
+type ReceiptData = Omit<TicketParaEnviar, "baseImponible" | "importeIva" | "importeTotal"> & {
+  baseImponible: string;
+  importeIva: string;
+  importeTotal: string;
+};
 
 const initialReceipt: ReceiptData = {
   objeto: "", localidad: "", numeroTicket: "", comercio: "", fecha: "", concepto: "", baseImponible: "", importeIva: "", importeTotal: "",
@@ -36,6 +40,34 @@ function receiptToForm(ticket: TicketAnalizado): ReceiptData {
   };
 }
 
+function parseAmount(value: string, fieldName: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const compact = trimmed.replace(/\s/g, "");
+  const normalized = compact.includes(",")
+    ? compact.replace(/\./g, "").replace(",", ".")
+    : compact;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount)) throw new Error(`El campo ${fieldName} no contiene un importe válido.`);
+  return amount;
+}
+
+function dateToApiFormat(value: string) {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : value.trim();
+}
+
+function formToPayload(data: ReceiptData): TicketParaEnviar {
+  return {
+    ...data,
+    fecha: dateToApiFormat(data.fecha),
+    baseImponible: parseAmount(data.baseImponible, "base imponible"),
+    importeIva: parseAmount(data.importeIva, "IVA"),
+    importeTotal: parseAmount(data.importeTotal, "importe total"),
+  };
+}
+
 function Icon({ children, size = 24 }: { children: ReactNode; size?: number }) {
   return <svg aria-hidden="true" fill="none" height={size} viewBox="0 0 24 24" width={size}>{children}</svg>;
 }
@@ -59,9 +91,17 @@ export default function TicketScanner() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [data, setData] = useState(initialReceipt);
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [merchantConfidence, setMerchantConfidence] = useState<number | null>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
+  let payloadPreview: TicketParaEnviar | null = null;
+  let payloadPreviewError: string | null = null;
+  try {
+    payloadPreview = formToPayload(data);
+  } catch (previewError) {
+    payloadPreviewError = previewError instanceof Error ? previewError.message : "Los datos no son válidos.";
+  }
 
   useEffect(() => () => { if (imageUrl) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
   function handleImage(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; if (imageUrl) URL.revokeObjectURL(imageUrl); setSelectedFile(file); setImageUrl(URL.createObjectURL(file)); setError(null); setStep("preview"); event.target.value = ""; }
@@ -89,6 +129,35 @@ export default function TicketScanner() {
       setStep("preview");
     }
   }
+  async function submitReceipt() {
+    if (!selectedFile) {
+      setError("No hay ninguna imagen asociada al ticket.");
+      return;
+    }
+
+    setError(null);
+    setIsSubmitting(true);
+
+    try {
+      const payload = formToPayload(data);
+      const formData = new FormData();
+      formData.append("Datos", new Blob([JSON.stringify(payload)], { type: "application/json" }), "datos.json");
+      formData.append("Imagen", selectedFile, selectedFile.name);
+
+      const response = await fetch("/api/receipts/submit", { method: "POST", body: formData });
+      const body = await response.json() as { ok: true } | ApiErrorResponse;
+
+      if (!response.ok || "error" in body) {
+        throw new Error("error" in body ? body.error.message : "No hemos podido guardar el ticket.");
+      }
+
+      setStep("success");
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : "No hemos podido guardar el ticket.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
   function updateField(field: keyof ReceiptData, value: string) { setData((current) => ({ ...current, [field]: value })); }
   function startAgain() { discardImage(); setData(initialReceipt); setMerchantConfidence(null); }
 
@@ -110,7 +179,7 @@ export default function TicketScanner() {
       </div>}
       {step === "review" && <div className="screen review-screen">
         <div className="review-top"><div className="mini-preview">{imageUrl ? <Image alt="Ticket" fill src={imageUrl} unoptimized/> : <ReceiptArtwork/>}</div><div><span className="success-label"><CheckIcon size={15}/> Lectura completada</span><h1>Revisa los datos</h1><p>Edita cualquier campo antes de confirmar.</p></div></div>
-        <form onSubmit={(event) => { event.preventDefault(); setStep("success"); }}>
+        <form onSubmit={(event) => { event.preventDefault(); void submitReceipt(); }}>
           <label className="field"><span>Objeto del ticket</span><input name="objeto" onChange={(event) => updateField("objeto", event.target.value)} placeholder="Ej. Comida con cliente" value={data.objeto}/></label>
           <label className="field"><span>Localidad</span><input autoComplete="address-level2" name="localidad" onChange={(event) => updateField("localidad", event.target.value)} placeholder="Ej. Madrid" value={data.localidad}/></label>
           <label className="field"><span>Comercio</span><input onChange={(event) => updateField("comercio", event.target.value)} value={data.comercio}/>{merchantConfidence !== null && <small><CheckIcon size={13}/> Confianza {merchantConfidence >= .8 ? "alta" : merchantConfidence >= .5 ? "media" : "baja"}</small>}</label>
@@ -118,7 +187,9 @@ export default function TicketScanner() {
           <label className="field"><span>Nº de ticket</span><input onChange={(event) => updateField("numeroTicket", event.target.value)} value={data.numeroTicket}/></label>
           <label className="field"><span>Concepto</span><input onChange={(event) => updateField("concepto", event.target.value)} value={data.concepto}/></label>
           <div className="amount-card"><label><span>Base imponible</span><div><input inputMode="decimal" onChange={(event) => updateField("baseImponible", event.target.value)} value={data.baseImponible}/><b>€</b></div></label><label><span>IVA</span><div><input inputMode="decimal" onChange={(event) => updateField("importeIva", event.target.value)} value={data.importeIva}/><b>€</b></div></label><div className="total-row"><span>Total</span><div><input aria-label="Total" inputMode="decimal" onChange={(event) => updateField("importeTotal", event.target.value)} value={data.importeTotal}/><b>€</b></div></div></div>
-          <button className="primary-button confirm-button" type="submit">Confirmar y añadir <ArrowIcon/></button>
+          {process.env.NODE_ENV === "development" && <section className="json-preview" aria-label="Vista previa de datos.json"><div><strong>datos.json</strong><span>Solo visible en desarrollo</span></div>{payloadPreview ? <pre>{JSON.stringify(payloadPreview, null, 2)}</pre> : <p>{payloadPreviewError}</p>}</section>}
+          {error && <p className="error-message" role="alert">{error}</p>}
+          <button className="primary-button confirm-button" disabled={isSubmitting} type="submit">{isSubmitting ? "Guardando…" : "Confirmar y añadir"} {!isSubmitting && <ArrowIcon/>}</button>
         </form>
       </div>}
       {step === "success" && <div className="screen success-screen">
