@@ -67,9 +67,7 @@ export type ConceptoTicketParaEnviar = {
 };
 
 export type TicketParaEnviar = {
-  email: string;
-  objeto: string;
-  localidad: string;
+  idImagen: string;
   numeroTicket: string;
   comercio: string;
   fecha: string;
@@ -77,6 +75,13 @@ export type TicketParaEnviar = {
   baseImponible: number | null;
   importeIva: number | null;
   importeTotal: number | null;
+};
+
+export type NotaGastosParaEnviar = {
+  email: string;
+  objeto: string;
+  localidad: string;
+  tickets: TicketParaEnviar[];
 };
 
 export type ApiErrorResponse = {

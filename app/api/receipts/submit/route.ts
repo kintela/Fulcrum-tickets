@@ -1,13 +1,13 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import type { ApiErrorResponse, TicketParaEnviar } from "@/lib/receipt";
+import type { ApiErrorResponse, NotaGastosParaEnviar, TicketParaEnviar } from "@/lib/receipt";
 
 export const maxDuration = 60;
+const MAX_TICKETS = 5;
+const MAX_IMAGE_BYTES = Math.floor(3.8 * 1024 * 1024);
 
 const TEXT_FIELDS = [
-  "email",
-  "objeto",
-  "localidad",
+  "idImagen",
   "numeroTicket",
   "comercio",
   "fecha",
@@ -38,6 +38,18 @@ function isTicket(value: unknown): value is TicketParaEnviar {
     });
 }
 
+function isNote(value: unknown): value is NotaGastosParaEnviar {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.email === "string"
+    && typeof candidate.objeto === "string"
+    && typeof candidate.localidad === "string"
+    && Array.isArray(candidate.tickets)
+    && candidate.tickets.length > 0
+    && candidate.tickets.length <= MAX_TICKETS
+    && candidate.tickets.every(isTicket);
+}
+
 function upstreamErrorMessage(value: unknown) {
   if (!value || typeof value !== "object") return null;
   const candidate = value as { message?: unknown; error?: { message?: unknown } };
@@ -63,31 +75,44 @@ export async function POST(request: Request) {
   try {
     const incoming = await request.formData();
     const datos = incoming.get("Datos");
-    const imagen = incoming.get("Imagen");
+    const imagenes = incoming.getAll("Imagenes").filter((image): image is File => image instanceof File);
 
-    if (!(datos instanceof File) || !(imagen instanceof File)) {
-      return errorResponse("INVALID_MULTIPART", "La petición debe incluir los datos y la imagen del ticket.", 400);
+    if (!(datos instanceof File) || imagenes.length === 0) {
+      return errorResponse("INVALID_MULTIPART", "La petición debe incluir los datos y las imágenes de la nota.", 400);
     }
 
-    let ticket: unknown;
+    let note: unknown;
     try {
-      ticket = JSON.parse(await datos.text());
+      note = JSON.parse(await datos.text());
     } catch {
-      return errorResponse("INVALID_TICKET_DATA", "Los datos del ticket no contienen un JSON válido.", 400);
+      return errorResponse("INVALID_NOTE_DATA", "Los datos de la nota no contienen un JSON válido.", 400);
     }
 
-    if (!isTicket(ticket)) {
-      return errorResponse("INVALID_TICKET_DATA", "Los campos del ticket no son válidos.", 400);
+    if (!isNote(note)) {
+      return errorResponse("INVALID_NOTE_DATA", "Los campos de la nota o de sus tickets no son válidos.", 400);
     }
 
-    const authenticatedTicket: TicketParaEnviar = {
-      ...ticket,
+    if (imagenes.length !== note.tickets.length || imagenes.length > MAX_TICKETS) {
+      return errorResponse("INVALID_IMAGE_COUNT", `La nota debe incluir entre 1 y ${MAX_TICKETS} imágenes, una por ticket.`, 400);
+    }
+
+    const imageNames = new Set(imagenes.map((image) => image.name));
+    if (!note.tickets.every((ticket) => imageNames.has(ticket.idImagen))) {
+      return errorResponse("IMAGE_MISMATCH", "No se ha encontrado la imagen correspondiente a uno de los tickets.", 400);
+    }
+
+    if (imagenes.reduce((total, image) => total + image.size, 0) > MAX_IMAGE_BYTES) {
+      return errorResponse("IMAGES_TOO_LARGE", "Las imágenes de la nota superan el tamaño máximo permitido.", 413);
+    }
+
+    const authenticatedNote: NotaGastosParaEnviar = {
+      ...note,
       email: session.user.email,
     };
 
     const outgoing = new FormData();
-    outgoing.append("Datos", new Blob([JSON.stringify(authenticatedTicket)], { type: "application/json" }), "datos.json");
-    outgoing.append("Imagen", imagen, imagen.name);
+    outgoing.append("Datos", new Blob([JSON.stringify(authenticatedNote)], { type: "application/json" }), "datos.json");
+    imagenes.forEach((image) => outgoing.append("Imagenes", image, image.name));
 
     const headers = new Headers();
     const token = process.env.MATRIX_RECEIPTS_API_TOKEN;
@@ -107,7 +132,7 @@ export async function POST(request: Request) {
         : null;
       return errorResponse(
         "MATRIX_API_ERROR",
-        upstreamErrorMessage(responseBody) ?? "La API matriz ha rechazado el ticket.",
+        upstreamErrorMessage(responseBody) ?? "La API matriz ha rechazado la nota de gastos.",
         upstream.status,
       );
     }

@@ -16,6 +16,10 @@ cp .env.example .env.local
 
 The default upload limit is 4 MB so it also works with Azure's F0 tier. Set `RECEIPT_MAX_FILE_SIZE_BYTES` to a larger value when using a tier that supports it. Never prefix the Azure key with `NEXT_PUBLIC_`: it must remain server-only.
 
+## Envío de notas
+
+Una nota puede acumular entre uno y cinco tickets. Antes del envío, el navegador convierte sus imágenes a JPEG y las comprime hasta un presupuesto conjunto máximo de 3,8 MB. La llamada a la API matriz utiliza `multipart/form-data` con una parte `Datos` (`datos.json`) y una parte `Imagenes` repetida por cada ticket. Cada entrada de `tickets` en el JSON contiene un `idImagen` que coincide con el nombre del archivo correspondiente.
+
 ## Getting Started
 
 First, run the development server:
