@@ -59,6 +59,13 @@ export type AnalyzeReceiptResponse = {
   ticket: TicketAnalizado;
 };
 
+export type ConceptoTicketParaEnviar = {
+  descripcion: string;
+  cantidad: number | null;
+  precioUnitario: number | null;
+  importeTotal: number | null;
+};
+
 export type TicketParaEnviar = {
   email: string;
   objeto: string;
@@ -66,7 +73,7 @@ export type TicketParaEnviar = {
   numeroTicket: string;
   comercio: string;
   fecha: string;
-  concepto: string;
+  conceptos: ConceptoTicketParaEnviar[];
   baseImponible: number | null;
   importeIva: number | null;
   importeTotal: number | null;

@@ -11,7 +11,6 @@ const TEXT_FIELDS = [
   "numeroTicket",
   "comercio",
   "fecha",
-  "concepto",
 ] as const satisfies readonly (keyof TicketParaEnviar)[];
 
 const AMOUNT_FIELDS = [
@@ -28,7 +27,15 @@ function isTicket(value: unknown): value is TicketParaEnviar {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   return TEXT_FIELDS.every((field) => typeof candidate[field] === "string")
-    && AMOUNT_FIELDS.every((field) => candidate[field] === null || (typeof candidate[field] === "number" && Number.isFinite(candidate[field])));
+    && AMOUNT_FIELDS.every((field) => candidate[field] === null || (typeof candidate[field] === "number" && Number.isFinite(candidate[field])))
+    && Array.isArray(candidate.conceptos)
+    && candidate.conceptos.length > 0
+    && candidate.conceptos.every((concepto) => {
+      if (!concepto || typeof concepto !== "object") return false;
+      const item = concepto as Record<string, unknown>;
+      return typeof item.descripcion === "string"
+        && ["cantidad", "precioUnitario", "importeTotal"].every((field) => item[field] === null || (typeof item[field] === "number" && Number.isFinite(item[field])));
+    });
 }
 
 function upstreamErrorMessage(value: unknown) {

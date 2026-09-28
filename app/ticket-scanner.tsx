@@ -2,18 +2,24 @@
 
 import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import type { AnalyzeReceiptResponse, ApiErrorResponse, TicketAnalizado, TicketParaEnviar } from "@/lib/receipt";
+import type { AnalyzeReceiptResponse, ApiErrorResponse, ConceptoTicketParaEnviar, TicketAnalizado, TicketParaEnviar } from "@/lib/receipt";
 import LogoutButton from "./logout-button";
 
 type Step = "capture" | "preview" | "processing" | "review" | "success";
-type ReceiptData = Omit<TicketParaEnviar, "email" | "baseImponible" | "importeIva" | "importeTotal"> & {
+type ReceiptConcept = Omit<ConceptoTicketParaEnviar, "cantidad" | "precioUnitario" | "importeTotal"> & {
+  cantidad: string;
+  precioUnitario: string;
+  importeTotal: string;
+};
+type ReceiptData = Omit<TicketParaEnviar, "email" | "conceptos" | "baseImponible" | "importeIva" | "importeTotal"> & {
+  conceptos: ReceiptConcept[];
   baseImponible: string;
   importeIva: string;
   importeTotal: string;
 };
 
 const initialReceipt: ReceiptData = {
-  objeto: "", localidad: "", numeroTicket: "", comercio: "", fecha: "", concepto: "", baseImponible: "", importeIva: "", importeTotal: "",
+  objeto: "", localidad: "", numeroTicket: "", comercio: "", fecha: "", conceptos: [], baseImponible: "", importeIva: "", importeTotal: "",
 };
 
 function formatAmount(value: number | null) {
@@ -27,14 +33,24 @@ function formatDate(value: string | null) {
 }
 
 function receiptToForm(ticket: TicketAnalizado): ReceiptData {
-  const descriptions = ticket.articulos.flatMap((item) => item.descripcion ? [item.descripcion] : []);
+  const conceptos = ticket.articulos.map((item) => ({
+    descripcion: item.descripcion ?? "",
+    cantidad: formatAmount(item.cantidad),
+    precioUnitario: formatAmount(item.precioUnitario),
+    importeTotal: formatAmount(item.importeTotal),
+  }));
   return {
     objeto: "",
     localidad: "",
     numeroTicket: ticket.numeroTicket ?? "",
     comercio: ticket.comercio ?? "",
     fecha: formatDate(ticket.fecha),
-    concepto: descriptions.slice(0, 3).join(", ") || ticket.tipoTicket || "",
+    conceptos: conceptos.length > 0 ? conceptos : [{
+      descripcion: ticket.tipoTicket ?? "",
+      cantidad: "",
+      precioUnitario: "",
+      importeTotal: "",
+    }],
     baseImponible: formatAmount(ticket.baseImponible),
     importeIva: formatAmount(ticket.importeIva),
     importeTotal: formatAmount(ticket.importeTotal),
@@ -64,6 +80,12 @@ function formToPayload(data: ReceiptData, email: string): TicketParaEnviar {
     ...data,
     email,
     fecha: dateToApiFormat(data.fecha),
+    conceptos: data.conceptos.map((concepto, index) => ({
+      descripcion: concepto.descripcion,
+      cantidad: parseAmount(concepto.cantidad, `cantidad del concepto ${index + 1}`),
+      precioUnitario: parseAmount(concepto.precioUnitario, `precio unitario del concepto ${index + 1}`),
+      importeTotal: parseAmount(concepto.importeTotal, `importe del concepto ${index + 1}`),
+    })),
     baseImponible: parseAmount(data.baseImponible, "base imponible"),
     importeIva: parseAmount(data.importeIva, "IVA"),
     importeTotal: parseAmount(data.importeTotal, "importe total"),
@@ -160,7 +182,13 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
       setIsSubmitting(false);
     }
   }
-  function updateField(field: keyof ReceiptData, value: string) { setData((current) => ({ ...current, [field]: value })); }
+  function updateField(field: Exclude<keyof ReceiptData, "conceptos">, value: string) { setData((current) => ({ ...current, [field]: value })); }
+  function updateConcept(index: number, field: keyof ReceiptConcept, value: string) {
+    setData((current) => ({
+      ...current,
+      conceptos: current.conceptos.map((concepto, conceptIndex) => conceptIndex === index ? { ...concepto, [field]: value } : concepto),
+    }));
+  }
   function startAgain() { discardImage(); setData(initialReceipt); setMerchantConfidence(null); }
 
   return <main className="app-shell">
@@ -187,7 +215,7 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
           <label className="field"><span>Comercio</span><input onChange={(event) => updateField("comercio", event.target.value)} value={data.comercio}/>{merchantConfidence !== null && <small><CheckIcon size={13}/> Confianza {merchantConfidence >= .8 ? "alta" : merchantConfidence >= .5 ? "media" : "baja"}</small>}</label>
           <label className="field"><span>Fecha</span><input inputMode="numeric" onChange={(event) => updateField("fecha", event.target.value)} value={data.fecha}/></label>
           <label className="field"><span>Nº de ticket</span><input onChange={(event) => updateField("numeroTicket", event.target.value)} value={data.numeroTicket}/></label>
-          <label className="field"><span>Concepto</span><input onChange={(event) => updateField("concepto", event.target.value)} value={data.concepto}/></label>
+          <section className="concepts-card"><div className="concepts-heading"><span>Conceptos</span><small>{data.conceptos.length} {data.conceptos.length === 1 ? "detectado" : "detectados"}</small></div>{data.conceptos.map((concepto, index) => <div className="concept-item" key={index}><label className="field"><span>Concepto {index + 1}</span><input onChange={(event) => updateConcept(index, "descripcion", event.target.value)} value={concepto.descripcion}/></label><div className="concept-values"><label><span>Cantidad</span><input inputMode="decimal" onChange={(event) => updateConcept(index, "cantidad", event.target.value)} value={concepto.cantidad}/></label><label><span>Precio unitario</span><div><input inputMode="decimal" onChange={(event) => updateConcept(index, "precioUnitario", event.target.value)} value={concepto.precioUnitario}/><b>€</b></div></label><label><span>Importe</span><div><input inputMode="decimal" onChange={(event) => updateConcept(index, "importeTotal", event.target.value)} value={concepto.importeTotal}/><b>€</b></div></label></div></div>)}</section>
           <div className="amount-card"><label><span>Base imponible</span><div><input inputMode="decimal" onChange={(event) => updateField("baseImponible", event.target.value)} value={data.baseImponible}/><b>€</b></div></label><label><span>IVA</span><div><input inputMode="decimal" onChange={(event) => updateField("importeIva", event.target.value)} value={data.importeIva}/><b>€</b></div></label><div className="total-row"><span>Total</span><div><input aria-label="Total" inputMode="decimal" onChange={(event) => updateField("importeTotal", event.target.value)} value={data.importeTotal}/><b>€</b></div></div></div>
           {process.env.NODE_ENV === "development" && <section className="json-preview" aria-label="Vista previa de datos.json"><div><strong>datos.json</strong><span>Solo visible en desarrollo</span></div>{payloadPreview ? <pre>{JSON.stringify(payloadPreview, null, 2)}</pre> : <p>{payloadPreviewError}</p>}</section>}
           {error && <p className="error-message" role="alert">{error}</p>}
@@ -196,7 +224,7 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
       </div>}
       {step === "success" && <div className="screen success-screen">
         <div className="success-check"><CheckIcon size={40}/></div><span className="eyebrow">Justificante añadido</span><h1>¡Todo listo!</h1><p>Los datos del ticket se han preparado para incorporarlos a tu nota de gastos.</p>
-        <div className="summary-card"><div><span>Objeto</span><strong>{data.objeto || "—"}</strong></div><div><span>Localidad</span><strong>{data.localidad || "—"}</strong></div><div><span>Comercio</span><strong>{data.comercio}</strong></div><div><span>Nº de ticket</span><strong>{data.numeroTicket || "—"}</strong></div><div><span>Concepto</span><strong>{data.concepto}</strong></div><div><span>Fecha</span><strong>{data.fecha}</strong></div><div className="summary-total"><span>Total</span><strong>{data.importeTotal} €</strong></div></div>
+        <div className="summary-card"><div><span>Objeto</span><strong>{data.objeto || "—"}</strong></div><div><span>Localidad</span><strong>{data.localidad || "—"}</strong></div><div><span>Comercio</span><strong>{data.comercio}</strong></div><div><span>Nº de ticket</span><strong>{data.numeroTicket || "—"}</strong></div><div><span>Conceptos</span><strong>{data.conceptos.map((concepto) => concepto.descripcion).filter(Boolean).join(", ") || "—"}</strong></div><div><span>Fecha</span><strong>{data.fecha}</strong></div><div className="summary-total"><span>Total</span><strong>{data.importeTotal} €</strong></div></div>
         <button className="primary-button full-button" onClick={startAgain} type="button">Escanear otro ticket <CameraIcon size={20}/></button><button className="text-link" type="button">Volver a la nota de gastos</button>
       </div>}
       <footer><span className="lock-icon">⌾</span> Tus datos se procesan de forma segura</footer>
