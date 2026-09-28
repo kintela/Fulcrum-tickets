@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -15,6 +15,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Fulcrum · Notas de gastos",
   description: "Captura y digitaliza tus tickets de gastos",
+  applicationName: "Fulcrum Tickets",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#087f73",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
