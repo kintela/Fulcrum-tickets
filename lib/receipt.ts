@@ -84,6 +84,11 @@ export type NotaGastosParaEnviar = {
   tickets: TicketParaEnviar[];
 };
 
+export type SubmitReceiptResponse = {
+  ok: true;
+  url: string | null;
+};
+
 export type ApiErrorResponse = {
   error: {
     code: string;

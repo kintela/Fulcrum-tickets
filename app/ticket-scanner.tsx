@@ -3,7 +3,7 @@
 import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { compressImagesToBudget } from "@/lib/client-image-compression";
-import type { AnalyzeReceiptResponse, ApiErrorResponse, ConceptoTicketParaEnviar, NotaGastosParaEnviar, TicketAnalizado, TicketParaEnviar } from "@/lib/receipt";
+import type { AnalyzeReceiptResponse, ApiErrorResponse, ConceptoTicketParaEnviar, NotaGastosParaEnviar, SubmitReceiptResponse, TicketAnalizado, TicketParaEnviar } from "@/lib/receipt";
 import LogoutButton from "./logout-button";
 
 const MAX_TICKETS = 5;
@@ -88,12 +88,19 @@ function formToTicketPayload(data: ReceiptData, ticketId: string): TicketParaEnv
     ...data,
     idImagen: imageName(ticketId),
     fecha: dateToApiFormat(data.fecha),
-    conceptos: data.conceptos.map((concepto, index) => ({
-      descripcion: concepto.descripcion,
-      cantidad: parseAmount(concepto.cantidad, `cantidad del concepto ${index + 1}`),
-      precioUnitario: parseAmount(concepto.precioUnitario, `precio unitario del concepto ${index + 1}`),
-      importeTotal: parseAmount(concepto.importeTotal, `importe del concepto ${index + 1}`),
-    })),
+    conceptos: data.conceptos.map((concepto, index) => {
+      const descripcion = concepto.descripcion.trim();
+      if (!descripcion) {
+        const ticket = data.numeroTicket.trim() || "sin número";
+        throw new Error(`El concepto ${index + 1} del ticket ${ticket} está vacío.`);
+      }
+      return {
+        descripcion,
+        cantidad: parseAmount(concepto.cantidad, `cantidad del concepto ${index + 1}`),
+        precioUnitario: parseAmount(concepto.precioUnitario, `precio unitario del concepto ${index + 1}`),
+        importeTotal: parseAmount(concepto.importeTotal, `importe del concepto ${index + 1}`),
+      };
+    }),
     baseImponible: parseAmount(data.baseImponible, "base imponible"),
     importeIva: parseAmount(data.importeIva, "IVA"),
     importeTotal: parseAmount(data.importeTotal, "importe total"),
@@ -147,6 +154,7 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
   const [noteData, setNoteData] = useState<NoteData>({ objeto: "", localidad: "" });
   const [draftTickets, setDraftTickets] = useState<DraftTicket[]>([]);
   const [submittedNote, setSubmittedNote] = useState<NotaGastosParaEnviar | null>(null);
+  const [expenseNotesUrl, setExpenseNotesUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState<string | null>(null);
@@ -154,15 +162,6 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
   const cameraInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
   const draftTicketsRef = useRef<DraftTicket[]>([]);
-  let payloadPreview: NotaGastosParaEnviar | null = null;
-  let payloadPreviewError: string | null = null;
-  try {
-    const previewTickets = draftTickets.map(({ id, data: ticketData }) => ({ id, data: ticketData }));
-    if (selectedTicketId) previewTickets.push({ id: selectedTicketId, data });
-    payloadPreview = buildNotePayload(userEmail, noteData, previewTickets);
-  } catch (previewError) {
-    payloadPreviewError = previewError instanceof Error ? previewError.message : "Los datos no son válidos.";
-  }
 
   useEffect(() => () => { if (imageUrl) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
   useEffect(() => { draftTicketsRef.current = draftTickets; }, [draftTickets]);
@@ -276,14 +275,32 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
       formData.append("Datos", new Blob([JSON.stringify(payload)], { type: "application/json" }), "datos.json");
       compressed.files.forEach((file) => formData.append("Imagenes", file, file.name));
 
+      if (process.env.NODE_ENV === "development") {
+        console.info("Enviando nota a /api/receipts/submit", {
+          datos: payload,
+          imagenes: compressed.files.map((file) => ({
+            nombre: file.name,
+            tipo: file.type,
+            bytes: file.size,
+          })),
+        });
+      }
+
       const response = await fetch("/api/receipts/submit", { method: "POST", body: formData });
-      const body = await response.json() as { ok: true } | ApiErrorResponse;
+      const body = await response.json() as SubmitReceiptResponse | ApiErrorResponse;
 
       if (!response.ok || "error" in body) {
+        console.error("La API ha rechazado la nota", {
+          httpStatus: response.status,
+          httpStatusText: response.statusText,
+          respuesta: body,
+          datosEnviados: payload,
+        });
         throw new Error("error" in body ? body.error.message : "No hemos podido guardar la nota de gastos.");
       }
 
       setSubmittedNote(payload);
+      setExpenseNotesUrl(body.url);
       setStep("success");
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "No hemos podido guardar la nota de gastos.");
@@ -305,6 +322,7 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
     setDraftTickets([]);
     setNoteData({ objeto: "", localidad: "" });
     setSubmittedNote(null);
+    setExpenseNotesUrl(null);
     clearCurrentTicket();
     setError(null);
     setStep("capture");
@@ -336,7 +354,6 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
           <label className="field"><span>Nº de ticket</span><input onChange={(event) => updateField("numeroTicket", event.target.value)} value={data.numeroTicket}/></label>
           <section className="concepts-card"><div className="concepts-heading"><span>Conceptos</span><small>{data.conceptos.length} {data.conceptos.length === 1 ? "detectado" : "detectados"}</small></div>{data.conceptos.map((concepto, index) => <div className="concept-item" key={index}><label className="field"><span>Concepto {index + 1}</span><input onChange={(event) => updateConcept(index, "descripcion", event.target.value)} value={concepto.descripcion}/></label><div className="concept-values"><label><span>Cantidad</span><input inputMode="decimal" onChange={(event) => updateConcept(index, "cantidad", event.target.value)} value={concepto.cantidad}/></label><label><span>Precio unitario</span><div><input inputMode="decimal" onChange={(event) => updateConcept(index, "precioUnitario", event.target.value)} value={concepto.precioUnitario}/><b>€</b></div></label><label><span>Importe</span><div><input inputMode="decimal" onChange={(event) => updateConcept(index, "importeTotal", event.target.value)} value={concepto.importeTotal}/><b>€</b></div></label></div></div>)}</section>
           <div className="amount-card"><label><span>Base imponible</span><div><input inputMode="decimal" onChange={(event) => updateField("baseImponible", event.target.value)} value={data.baseImponible}/><b>€</b></div></label><label><span>IVA</span><div><input inputMode="decimal" onChange={(event) => updateField("importeIva", event.target.value)} value={data.importeIva}/><b>€</b></div></label><div className="total-row"><span>Total</span><div><input aria-label="Total" inputMode="decimal" onChange={(event) => updateField("importeTotal", event.target.value)} value={data.importeTotal}/><b>€</b></div></div></div>
-          {process.env.NODE_ENV === "development" && <section className="json-preview" aria-label="Vista previa de datos.json"><div><strong>datos.json</strong><span>Solo visible en desarrollo</span></div>{payloadPreview ? <pre>{JSON.stringify(payloadPreview, null, 2)}</pre> : <p>{payloadPreviewError}</p>}</section>}
           {error && <p className="error-message" role="alert">{error}</p>}
           <button className="primary-button confirm-button" type="submit">Añadir ticket a la nota <ArrowIcon/></button>
         </form>
@@ -352,9 +369,10 @@ export default function TicketScanner({ userEmail, userName }: { userEmail: stri
         <button className="primary-button full-button send-note-button" disabled={isSubmitting || draftTickets.length === 0} onClick={() => void submitNote()} type="button">{isSubmitting ? "Preparando envío…" : `Enviar nota con ${draftTickets.length} ${draftTickets.length === 1 ? "ticket" : "tickets"}`} {!isSubmitting && <ArrowIcon/>}</button>
       </div>}
       {step === "success" && <div className="screen success-screen">
-        <div className="success-check"><CheckIcon size={40}/></div><span className="eyebrow">Nota enviada</span><h1>¡Todo listo!</h1><p>La nota de gastos y todos sus justificantes se han enviado correctamente.</p>
+        <div className="success-check"><CheckIcon size={40}/></div><span className="eyebrow">Nota enviada</span><h1>¡Todo listo!</h1><p>La nota de gastos y todos sus justificantes se ha creado correctamente.</p>
         <div className="summary-card"><div><span>Objeto</span><strong>{submittedNote?.objeto || "—"}</strong></div><div><span>Localidad</span><strong>{submittedNote?.localidad || "—"}</strong></div><div><span>Tickets</span><strong>{submittedNote?.tickets.length ?? 0}</strong></div><div className="summary-total"><span>Total</span><strong>{formatAmount(submittedNote?.tickets.reduce((total, ticket) => total + (ticket.importeTotal ?? 0), 0) ?? 0)} €</strong></div></div>
-        <button className="primary-button full-button" onClick={startAgain} type="button">Crear otra nota <CameraIcon size={20}/></button><button className="text-link" type="button">Volver a notas de gastos</button>
+        <button className="primary-button full-button" onClick={startAgain} type="button">Crear otra nota <CameraIcon size={20}/></button>
+        {expenseNotesUrl && <p className="success-note-link">Pincha <a href={expenseNotesUrl} rel="noopener noreferrer" target="_blank">aquí</a> para ver y/o editar la nota recién creada y enviarla.</p>}
       </div>}
       <footer><span className="lock-icon">⌾</span> Tus datos se procesan de forma segura</footer>
       <input accept="image/jpeg,image/png,image/bmp,image/tiff,image/heif,image/heic" capture="environment" className="sr-only" onChange={handleImage} ref={cameraInput} type="file"/><input accept="image/jpeg,image/png,image/bmp,image/tiff,image/heif,image/heic" className="sr-only" onChange={handleImage} ref={galleryInput} type="file"/>

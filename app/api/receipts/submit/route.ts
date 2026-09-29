@@ -50,11 +50,68 @@ function isNote(value: unknown): value is NotaGastosParaEnviar {
     && candidate.tickets.every(isTicket);
 }
 
+function textValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function upstreamErrorMessage(value: unknown) {
   if (!value || typeof value !== "object") return null;
-  const candidate = value as { message?: unknown; error?: { message?: unknown } };
-  if (typeof candidate.error?.message === "string") return candidate.error.message;
-  return typeof candidate.message === "string" ? candidate.message : null;
+
+  const candidate = value as {
+    title?: unknown;
+    detail?: unknown;
+    message?: unknown;
+    error?: unknown;
+    errors?: unknown;
+  };
+  const nestedError = candidate.error && typeof candidate.error === "object"
+    ? textValue((candidate.error as { message?: unknown }).message)
+    : null;
+  const validationErrors = candidate.errors && typeof candidate.errors === "object"
+    ? Object.values(candidate.errors as Record<string, unknown>)
+      .flatMap((entry) => Array.isArray(entry) ? entry : [entry])
+      .flatMap((entry) => textValue(entry) ?? [])
+    : [];
+  const summary = [
+    textValue(candidate.detail),
+    textValue(candidate.message),
+    nestedError,
+    textValue(candidate.error),
+    ...validationErrors,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  if (summary.length > 0) return [...new Set(summary)].join(" ");
+  return textValue(candidate.title);
+}
+
+function responsePreview(value: string) {
+  const limit = 4_000;
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+function safeHttpUrl(value: unknown) {
+  if (typeof value !== "string") return null;
+
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function expenseNotesUrl(value: unknown) {
+  const directUrl = safeHttpUrl(value);
+  if (directUrl) return directUrl;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const response = value as Record<string, unknown>;
+  const entries = Object.entries(response);
+  const exactUrl = entries.find(([key]) => key.toLowerCase() === "url");
+  if (exactUrl) return safeHttpUrl(exactUrl[1]);
+
+  const namedUrl = entries.find(([key, entryValue]) => key.toLowerCase().includes("url") && safeHttpUrl(entryValue));
+  return safeHttpUrl(namedUrl?.[1]);
 }
 
 export async function POST(request: Request) {
@@ -126,18 +183,61 @@ export async function POST(request: Request) {
     });
 
     if (!upstream.ok) {
-      const contentType = upstream.headers.get("content-type");
-      const responseBody = contentType?.includes("application/json")
-        ? await upstream.json()
-        : null;
+      const contentType = upstream.headers.get("content-type") ?? "";
+      const responseText = await upstream.text();
+      let responseBody: unknown = null;
+
+      if (contentType.includes("application/json") && responseText) {
+        try {
+          responseBody = JSON.parse(responseText);
+        } catch {
+          responseBody = null;
+        }
+      }
+
+      const apiMessage = upstreamErrorMessage(responseBody)
+        ?? (contentType.startsWith("text/plain") ? textValue(responseText) : null);
+      console.error("Matrix API rejected expense note", {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        contentType,
+        response: responsePreview(responseText),
+        request: {
+          noteFields: Object.keys(authenticatedNote),
+          ticketCount: authenticatedNote.tickets.length,
+          ticketFields: Object.keys(authenticatedNote.tickets[0] ?? {}),
+          conceptFields: Object.keys(authenticatedNote.tickets[0]?.conceptos[0] ?? {}),
+          tickets: authenticatedNote.tickets.map((ticket) => ({
+            numeroTicket: ticket.numeroTicket,
+            conceptos: ticket.conceptos.map((concepto, index) => ({
+              posicion: index + 1,
+              ...concepto,
+            })),
+          })),
+          images: imagenes.map((image) => ({ name: image.name, type: image.type, size: image.size })),
+        },
+      });
       return errorResponse(
         "MATRIX_API_ERROR",
-        upstreamErrorMessage(responseBody) ?? "La API matriz ha rechazado la nota de gastos.",
+        apiMessage
+          ? `La API matriz respondió HTTP ${upstream.status}: ${apiMessage}`
+          : `La API matriz ha rechazado la nota de gastos (HTTP ${upstream.status}).`,
         upstream.status,
       );
     }
 
-    return Response.json({ ok: true });
+    const responseText = await upstream.text();
+    let responseBody: unknown = responseText;
+
+    if (responseText) {
+      try {
+        responseBody = JSON.parse(responseText);
+      } catch {
+        // Some API implementations return the URL as plain text.
+      }
+    }
+
+    return Response.json({ ok: true, url: expenseNotesUrl(responseBody) });
   } catch (error) {
     console.error("Unexpected matrix API error", error);
     return errorResponse("MATRIX_API_UNAVAILABLE", "No hemos podido conectar con la API matriz.", 502);
