@@ -16,6 +16,11 @@ export const metadata: Metadata = {
   title: "Fulcrum · Notas de gastos",
   description: "Captura y digitaliza tus tickets de gastos",
   applicationName: "Fulcrum Tickets",
+  appleWebApp: {
+    capable: true,
+    title: "Fulcrum Tickets",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {
